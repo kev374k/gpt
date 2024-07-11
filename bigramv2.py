@@ -97,7 +97,35 @@ class MultiHeadAttention(nn.Module):
 
     def forward(self, x):
         return torch.cat([h(x) for h in self.heads], dim = -1)
+    
+class FeedForwardNetwork(nn.Module):
+    """
+    Feed Forward network with a ReLU activation in between
+    """
+    def __init__(self, n_embd):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, n_embd),
+            nn.ReLU(),
+        )
+    
+    def forward(self, x):
+        return self.net(x)
 
+class Block(nn.Module):
+    """
+    Block thqat contains all the previous neural network layers
+    """
+    def __init__(self, n_embd, n_head):
+        super().__init__()
+        head_size = n_embd // n_head
+        self.sa = MultiHeadAttention(n_embd, head_size)
+        self.ffwd = FeedForwardNetwork(n_embd)
+    
+    def forward(self, x):
+        out = self.sa(x)
+        out = self.ffwd(x)
+        return out
 class BigramLanguageModel(nn.Module):
     """
     initialization of the BigramLanguageModel
@@ -106,8 +134,15 @@ class BigramLanguageModel(nn.Module):
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
+        self.encoder_blocks = nn.Sequential(
+            Block(n_embd, n_head = 4),
+        )
+        self.blocks = nn.Sequential(
+            Block(n_embd, n_head = 4),
+            Block(n_embd, n_head = 4),
+            Block(n_embd, n_head = 4),
+        )
         self.lm_head = nn.Linear(n_embd, vocab_size)
-        self.sa_head = MultiHeadAttention(8, n_embd//8)
 
     def forward(self, idx, targets=None):
         B, T = idx.shape
@@ -116,7 +151,7 @@ class BigramLanguageModel(nn.Module):
         token_embeddings = self.token_embedding_table(idx) # (B, T, C)
         positional_embeddings = self.position_embedding_table(torch.arange(T, device = device))
         x = token_embeddings + positional_embeddings
-        x = self.sa_head(x)
+        x = self.blocks(x)
         logits = self.lm_head(x) #(B, T, vocab_size)
 
         if targets is None:
