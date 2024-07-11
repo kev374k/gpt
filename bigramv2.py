@@ -1,10 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 batch_size = 32
 block_size = 8
-max_iters = 10000
+max_iters = 4000
 eval_interval = 500
 learning_rate = 1e-3
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -77,12 +78,12 @@ class Head(nn.Module):
     def forward(self, x):
         B, T, C = x.shape
         q, k, v = self.query(x), self.key(x), self.value(x)
-    
+
         # compute attention scores
         w = q @ k.transpose(-2, -1) * C ** -0.5
         wei = w.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
         wei = F.softmax(wei, dim = -1)
-    
+
         # perform weighteted aggregation using v from before
         output = wei @ v
         return output
@@ -94,10 +95,12 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, num_heads, head_size):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.proj = nn.Linear(head_size * n_embd, n_embd)
 
     def forward(self, x):
-        return torch.cat([h(x) for h in self.heads], dim = -1)
-    
+        out = torch.cat([h(x) for h in self.heads], dim = -1)
+        out = self.proj(out)
+        return out
 class FeedForwardNetwork(nn.Module):
     """
     Feed Forward network with a ReLU activation in between
@@ -105,10 +108,11 @@ class FeedForwardNetwork(nn.Module):
     def __init__(self, n_embd):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embd, n_embd),
+            nn.Linear(n_embd, n_embd * 4),
             nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd),
         )
-    
+
     def forward(self, x):
         return self.net(x)
 
@@ -121,11 +125,38 @@ class Block(nn.Module):
         head_size = n_embd // n_head
         self.sa = MultiHeadAttention(n_embd, head_size)
         self.ffwd = FeedForwardNetwork(n_embd)
-    
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
+
     def forward(self, x):
-        out = self.sa(x)
-        out = self.ffwd(x)
-        return out
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
+        return x
+    
+class PositionalEncoding(nn.Module):
+    """
+    Adds positional encoding functionality for the language model
+    """
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
+        super().__init__()
+        self.dropout = nn.Dropout(p = dropout)
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000) / d_model))
+        pe = torch.zeros(max_len, 1, d_model)
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        """
+        Arguments: 
+            x: Tensor, shape ''[seq_len, batch_size, embedding_dim]''
+        """
+        x = x + self.pe[:x.size(0)]
+        return self.dropout(x)
+    
+    
 class BigramLanguageModel(nn.Module):
     """
     initialization of the BigramLanguageModel
@@ -134,13 +165,12 @@ class BigramLanguageModel(nn.Module):
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.encoder_blocks = nn.Sequential(
-            Block(n_embd, n_head = 4),
-        )
+        self.positional_encoder = PositionalEncoding(n_embd)
         self.blocks = nn.Sequential(
             Block(n_embd, n_head = 4),
             Block(n_embd, n_head = 4),
             Block(n_embd, n_head = 4),
+            nn.LayerNorm(n_embd)
         )
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
@@ -151,6 +181,7 @@ class BigramLanguageModel(nn.Module):
         token_embeddings = self.token_embedding_table(idx) # (B, T, C)
         positional_embeddings = self.position_embedding_table(torch.arange(T, device = device))
         x = token_embeddings + positional_embeddings
+        x = self.positional_encoder(x.transpose(0, 1)).transpose(0, 1)
         x = self.blocks(x)
         logits = self.lm_head(x) #(B, T, vocab_size)
 
