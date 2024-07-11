@@ -78,18 +78,50 @@ class GenerateText:
         return xb, yb
 
     @torch.no_grad()
-    def get_loss(self, model):
+    def get_loss(self, model, eval_iterations = EVAL_ITERS):
         """
         Used to get the loss of the model
         """
         out = {}
         model.eval()
         for split in ["train", "eval"]:
-            losses = torch.zeros(EVAL_ITERS)
-            for k in range(EVAL_ITERS):
+            losses = torch.zeros(eval_iterations)
+            for k in range(eval_iterations):
                 x, y = self.get_batch(split)
                 loss = model(x, y)[1]
                 losses[k] = loss.item()
             out[split] = losses.mean()
         model.train()
         return out
+
+class Head(nn.Module):
+    """
+    A single head of self-attention
+    """
+    def __init__(self, head_size: int, block_size: int = BLOCK_SIZE, dropout: float = DROPOUT):
+        """
+        Initialization of the Head Class
+        """
+        super().__init__()
+        self.key = nn.Linear(N_EMBD, head_size, bias = False)
+        self.query = nn.Linear(N_EMBD, head_size, bias = False)
+        self.value = nn.Linear(N_EMBD, head_size, bias = False)
+        self.register_buffer("tril", torch.tril(torch.ones(block_size, block_size)))
+
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        B, T, C = x.shape
+        q, k, v = self.query(x), self.key(x), self.value(x)
+
+        # compute attention scores
+        w = q @ k.transpose(-2, 1) * C ** -0.5
+        wei = w.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
+        wei = F.softmax(wei, dim = -1)
+
+        # perform weighted aggregiation using our values
+        output = wei @ v
+        return output
+    
+
+
