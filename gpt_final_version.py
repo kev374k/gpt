@@ -2,6 +2,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from dataclasses import dataclass
 
 BATCH_SIZE = 64
 BLOCK_SIZE = 256
@@ -9,7 +10,7 @@ MAX_ITERS = 5000
 EVAL_INTERVAL = 500
 LEARNING_RATE = 5e-4
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-EVAL_ITERS = 200
+EVAL_ITERS = 1
 N_EMBD = 384
 N_HEAD = 6
 N_LAYER = 6
@@ -67,7 +68,9 @@ class GenerateText:
         """
         return "".join([self.idx_to_char[i] for i in x])
 
-    def get_batch(self, split, block_size = BLOCK_SIZE, batch_size = BATCH_SIZE, device = DEVICE):
+    def get_batch(
+        self, split, block_size=BLOCK_SIZE, batch_size=BATCH_SIZE, device=DEVICE
+    ):
         """
         Used to get a batch of data for batch gradient descent
         """
@@ -79,79 +82,115 @@ class GenerateText:
         return xb, yb
 
     @torch.no_grad()
-    def get_loss(self, model, eval_iterations = EVAL_ITERS):
+    def get_loss(self, model, eval_iterations=EVAL_ITERS):
         """
         Used to get the loss of the model
         """
         out = {}
         model.eval()
-        for split in ["train", "eval"]:
+        print("working")
+        for split in ["train", "val"]:
             losses = torch.zeros(eval_iterations)
             for k in range(eval_iterations):
                 x, y = self.get_batch(split)
-                loss = model(x, y)[1]
+                logits, loss = model(x, y)
+                print(loss)
                 losses[k] = loss.item()
             out[split] = losses.mean()
         model.train()
         return out
 
-class Head(nn.Module):
+
+class LayerNorm(nn.Module):
+    """
+    LayerNorm w/optional bias
+    """
+
+    def __init__(self, ndim, bias):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(ndim))
+        self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
+
+    def forward(self, input):
+        """
+        Forward Pass
+        """
+        return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
+
+
+class SelfAttention(nn.Module):
     """
     A single head of self-attention
     """
-    def __init__(self, head_size: int, n_embd: int = N_EMBD, block_size: int = BLOCK_SIZE,\
-                  dropout: float = DROPOUT):
+
+    def __init__(self, config):
         """
         Initialization of the Head Class
         """
         super().__init__()
-        self.key = nn.Linear(n_embd, head_size, bias = False)
-        self.query = nn.Linear(n_embd, head_size, bias = False)
-        self.value = nn.Linear(n_embd, head_size, bias = False)
-        self.register_buffer("tril", torch.tril(torch.ones(block_size, block_size)))
+        self.n_embd = config.n_embd
+        self.n_head = config.n_head
+        self.block_size = config.block_size
+        self.dropout = config.dropout
+        # getting the key, query, and value projections for all heads in a batch
+        self.c_attention = nn.Linear(self.n_embd, 3 * self.n_embd, bias=False)
 
-        self.dropout = nn.Dropout(dropout)
+        # output projection
+        self.c_projection = nn.Linear(self.n_embd, self.n_embd)
+
+        # regularization
+        self.attn_dropout = nn.Dropout(self.dropout)
+        self.resid_dropout = nn.Dropout(self.dropout)
+
+        self.flash = hasattr(F, "scaled_dot_product_attention")
+        if not self.flash:
+            print("Using Slow Attention, Flash requires PyTorch >= 2.0")
+            self.register_buffer(
+                "bias", torch.tril(torch.ones(self.block_size, self.block_size))
+            ).view(1, 1, self.block_size, self.block_size)
 
     def forward(self, x):
         """
         Forward pass for the Head Module
         """
-        t, c = x.shape[1:]
-        q, k, v = self.query(x), self.key(x), self.value(x)
+        b, t, c = x.shape
+        q, k, v = self.c_attention(x).split(self.n_embd, dim=-1)
+        q = q.view(b, t, self.n_head, c // self.n_head).transpose(
+            1, 2
+        )  # (B, nH, T, hs)
+        k = k.view(b, t, self.n_head, c // self.n_head).transpose(
+            1, 2
+        )  # (B, nH, T, hs)
+        v = v.view(b, t, self.n_head, c // self.n_head).transpose(
+            1, 2
+        )  # (B, nH, T, hs)
 
-        # compute attention scores
-        w = q @ k.transpose(-2, 1) * c ** -0.5
-        wei = w.masked_fill(self.tril[:t, :t] == 0, float('-inf'))
-        wei = F.softmax(wei, dim = -1)
+        if self.flash:
+            y = F.scaled_dot_product_attention(
+                q, k, v, attn_mask=None, dropout_p=self.dropout, is_causal=True
+            )
+        else:
+            # compute attention scores
+            w = q @ k.transpose(-2, 1) * c**-0.5
+            wei = w.masked_fill(self.bias[:t, :t] == 0, float("-inf"))
+            wei = F.softmax(wei, dim=-1)
 
-        # perform weighted aggregiation using our values
-        output = wei @ v
-        return output
+            # perform weighted aggregiation using our values
+            y = wei @ v
 
-class MultiHeadedAttention(nn.Module):
-    """
-    Multiple Heads of Self-Attention in Parallel
-    """
-    def __init__(self, num_heads, head_size, n_embd = N_EMBD, dropout = DROPOUT):
-        super().__init__()
-        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
-        self.proj = nn.Linear(head_size * n_embd, n_embd)
-        self.dropout = nn.Dropout(dropout)
+        y = y.transpose(1, 2).contiguous().view(b, t, c)
+        y = self.resid_dropout(self.c_projection(y))
+        return y
 
-    def forward(self, x):
-        """
-        Forward pass for the MultiHeadedAttention class
-        """
-        out = torch.cat([h(x) for h in self.heads])
-        out = self.proj(out)
-        return out
 
 class FeedForwardNetwork(nn.Module):
     """
     Feed Forward Network with ReLU activation in between
     """
-    def __init__(self, n_embd = N_EMBD):
+
+    def __init__(self, config):
         super().__init__()
+        n_embd = config.n_embd
         self.net = nn.Sequential(
             nn.Linear(n_embd, n_embd * 4),
             nn.ReLU(),
@@ -164,23 +203,23 @@ class FeedForwardNetwork(nn.Module):
         """
         return self.net(x)
 
+
 class Block(nn.Module):
     """
     Block that encapsulates all the previous neural network layers into one
     """
-    def __init__(self, n_embd = N_EMBD, n_head = N_HEAD):
-        super().__init__()
-        head_size = n_embd // n_head
 
+    def __init__(self, config):
+        super().__init__()
         # self-attention layer
-        self.sa = MultiHeadedAttention(n_embd, head_size)
+        self.sa = SelfAttention(config)
 
         # feed forward network initalization
-        self.ffwd = FeedForwardNetwork(n_embd)
+        self.ffwd = FeedForwardNetwork(config)
 
         # initialization of the two layer norms used in the structure
-        self.ln1 = nn.LayerNorm(n_embd)
-        self.ln2 = nn.LayerNorm(n_embd)
+        self.ln1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.ln2 = LayerNorm(config.n_embd, bias=config.bias)
 
     def forward(self, x):
         """
@@ -190,8 +229,143 @@ class Block(nn.Module):
         x = x + self.ffwd(self.ln2(x))
         return x
 
+
 class PositionalEncoder(nn.Module):
     """
     Adds positional encoding functionality for the language model
     """
-    def __init__(self, d_model, dropout = DROPOUT, max_len = MAX_LENGTH):
+
+    def __init__(self, d_model, config):
+        super().__init__()
+        self.dropout = nn.Dropout(config.dropout)
+        max_len = config.max_len
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000) / d_model))
+        pe = torch.zeros(max_len, 1, d_model)
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        self.register_buffer("pe", pe)
+
+    def forward(self, x):
+        """
+        Forward pass for the PositionalEncoder Cl ass
+        """
+        x = x + self.pe[: x.size(0)]
+        return self.dropout(x)
+
+
+@dataclass
+class GPTConfig:
+    """
+    Data Configurations for GPT
+    """
+
+    text_generator = GenerateText("gpt/input.txt")
+    block_size: int = BLOCK_SIZE
+    vocab_size: int = text_generator.vocab_size
+    n_layer: int = N_LAYER
+    n_head: int = N_HEAD
+    n_embd: int = N_EMBD
+    max_len: int = MAX_LENGTH
+    dropout: int = DROPOUT
+    bias: bool = False
+    device: str = DEVICE
+
+
+class GPT(nn.Module):
+    """
+    Initialization of the GPT
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        self.transformer = nn.ModuleDict(
+            dict(
+                # token embedding table
+                wte=nn.Embedding(config.vocab_size, config.n_embd),
+                # positional embedding table
+                wpe=nn.Embedding(config.block_size, config.n_embd),
+                drop=nn.Dropout(config.dropout),
+                h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+                ln_f=LayerNorm(config.n_embd, bias=config.bias),
+            )
+        )
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=config.bias)
+        self.transformer.wte.weight = self.lm_head.weight
+
+        self.apply(self._init_weights)
+
+        for pn, p in self.named_parameters():
+            if pn.endswith("c_proj.weight"):
+                nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer))
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def forward(self, idx, targets=None):
+        B, T = idx.shape
+
+        # idx and targets are both (B,T) tensor of integers
+        tok_emb = self.transformer.wte(idx)  # (B,T,C)
+        pos_emb = self.transformer.wpe(torch.arange(T, device=DEVICE))  # (T,C)
+        x = tok_emb + pos_emb  # (B,T,C)\
+        for block in self.transformer.h:
+            x = block(x)
+        x = self.transformer.ln_f(x)  # (B,T,C)
+        logits = self.lm_head(x)  # (B,T,vocab_size)
+
+        if targets is None:
+            loss = None
+        else:
+            B, T, C = logits.shape
+            logits = logits.view(B * T, C)
+            targets = targets.view(B * T)
+            loss = F.cross_entropy(logits, targets)
+
+        return logits, loss
+
+    def generate(self, idx, config, max_new_tokens):
+        # idx is (B, T) array of indices in the current context
+        for _ in range(max_new_tokens):
+            # crop idx to the last block_size tokens
+            idx_cond = idx[:, -config.block_size :]
+            # get the predictions
+            logits, loss = self(idx_cond)
+            # focus only on the last time step
+            logits = logits[:, -1, :]  # becomes (B, C)
+            # apply softmax to get probabilities
+            probs = F.softmax(logits, dim=-1)  # (B, C)
+            # sample from the distribution
+            idx_next = torch.multinomial(probs, num_samples=1)  # (B, 1)
+            # append sampled index to the running sequence
+            idx = torch.cat((idx, idx_next), dim=1)  # (B, T+1)
+        return idx
+
+
+configurations = GPTConfig()
+textGenerator = GenerateText("gpt/input.txt")
+model = GPT(configurations)
+m = model.to(DEVICE)
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+
+for iteration in range(MAX_ITERS):
+    if iteration % EVAL_INTERVAL == 0 or iteration == MAX_ITERS - 1:
+        losses = textGenerator.get_loss(model = model)
+        print(
+            f"Step {iteration}: Train Loss {losses['train']:.4f}, Val Loss {losses['val']:.4f}"
+        )
+    xb, yb = textGenerator.get_batch("train")
+
+    cur_logits, cur_loss = model(xb, yb)
+
+    optimizer.zero_grad(set_to_none=True)
+    cur_loss.backward()
+    optimizer.step()
+context = torch.zeros((1, 1), dtype=torch.long, device=DEVICE)
+print(textGenerator.decode(m.generate(context, max_new_tokens=500)[0].tolist()))
