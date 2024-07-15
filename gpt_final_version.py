@@ -1,19 +1,19 @@
 import math
+from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from dataclasses import dataclass
 
-BATCH_SIZE = 64
-BLOCK_SIZE = 256
+BATCH_SIZE = 24
+BLOCK_SIZE = 128
 MAX_ITERS = 5000
 EVAL_INTERVAL = 500
 LEARNING_RATE = 5e-4
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 EVAL_ITERS = 1
-N_EMBD = 384
-N_HEAD = 6
-N_LAYER = 6
+N_EMBD = 128
+N_HEAD = 16
+N_LAYER = 16
 DROPOUT = 0.1
 MAX_LENGTH = 5000
 
@@ -356,7 +356,7 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
 for iteration in range(MAX_ITERS):
     if iteration % EVAL_INTERVAL == 0 or iteration == MAX_ITERS - 1:
-        losses = textGenerator.get_loss(model = model)
+        losses = textGenerator.get_loss(model=model)
         print(
             f"Step {iteration}: Train Loss {losses['train']:.4f}, Val Loss {losses['val']:.4f}"
         )
@@ -368,4 +368,8 @@ for iteration in range(MAX_ITERS):
     cur_loss.backward()
     optimizer.step()
 context = torch.zeros((1, 1), dtype=torch.long, device=DEVICE)
-print(textGenerator.decode(m.generate(context, max_new_tokens=500)[0].tolist()))
+print(
+    textGenerator.decode(
+        m.generate(context, config=configurations, max_new_tokens=500)[0].tolist()
+    )
+)
