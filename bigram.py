@@ -10,7 +10,7 @@ learning_rate = 1e-2
 device = "cuda" if torch.cuda.is_available() else "cpu"
 eval_iters = 200
 
-with open("gpt/input.txt", "r", encoding="utf-8") as f:
+with open("gpt/data/little_shakespeare.txt", "r", encoding="utf-8") as f:
     text = f.read()
 
 chars = sorted(list(set(text)))

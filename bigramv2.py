@@ -16,7 +16,7 @@ n_layer = 6
 dropout = 0.2
 # ------------
 
-with open("gpt/input.txt", "r", encoding="utf-8") as f:
+with open("gpt/data/little_shakespeare.txt", "r", encoding="utf-8") as f:
     text = f.read()
 
 # here are all the unique characters that occur in this text

@@ -4,17 +4,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-BATCH_SIZE = 24
-BLOCK_SIZE = 128
+BATCH_SIZE = 8  # 24
+BLOCK_SIZE = 8  # 128
 MAX_ITERS = 5000
 EVAL_INTERVAL = 500
 LEARNING_RATE = 5e-4
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 EVAL_ITERS = 1
-N_EMBD = 128
-N_HEAD = 16
-N_LAYER = 16
-DROPOUT = 0.1
+N_EMBD = 32  # 128
+N_HEAD = 4  # 16
+N_LAYER = 4  # 16
+DROPOUT = 0.2
 MAX_LENGTH = 5000
 
 # ----------------------
@@ -260,9 +260,8 @@ class GPTConfig:
     Data Configurations for GPT
     """
 
-    text_generator = GenerateText("gpt/input.txt")
+    file_path: str
     block_size: int = BLOCK_SIZE
-    vocab_size: int = text_generator.vocab_size
     n_layer: int = N_LAYER
     n_head: int = N_HEAD
     n_embd: int = N_EMBD
@@ -270,6 +269,10 @@ class GPTConfig:
     dropout: int = DROPOUT
     bias: bool = False
     device: str = DEVICE
+
+    def __post_init__(self):
+        self.text_generator = GenerateText(self.file_path)
+        self.vocab_size = self.text_generator.vocab_size
 
 
 class GPT(nn.Module):
@@ -299,6 +302,8 @@ class GPT(nn.Module):
             if pn.endswith("c_proj.weight"):
                 nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer))
 
+        print("Number of Parameters Used: %.2fM" % (self.get_num_params() / 1e6))
+
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -306,6 +311,15 @@ class GPT(nn.Module):
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def get_num_params(self, non_embedding=True):
+        """
+        Return the number of parameters used in the model.
+        """
+        n_params = sum(p.numel() for p in self.parameters())
+        if non_embedding:
+            n_params -= self.transformer.wpe.weight.numel()
+        return int(n_params)
 
     def forward(self, idx, targets=None):
         B, T = idx.shape
@@ -330,6 +344,9 @@ class GPT(nn.Module):
         return logits, loss
 
     def generate(self, idx, config, max_new_tokens):
+        """
+        Used to generate new text, up to a maximum
+        """
         # idx is (B, T) array of indices in the current context
         for _ in range(max_new_tokens):
             # crop idx to the last block_size tokens
@@ -346,9 +363,16 @@ class GPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)  # (B, T+1)
         return idx
 
+    def save_model(self, model, model_path):
+        """
+        Used to save the model when it is done training
+        """
+        torch.save(model.state_dict(), model_path)
 
-configurations = GPTConfig()
-textGenerator = GenerateText("gpt/input.txt")
+
+FILE_PATH = "gpt/data/little_shakespeare.txt"
+configurations = GPTConfig(FILE_PATH)
+textGenerator = GenerateText(FILE_PATH)
 model = GPT(configurations)
 m = model.to(DEVICE)
 
@@ -370,11 +394,10 @@ for iteration in range(MAX_ITERS):
 context = torch.zeros((1, 1), dtype=torch.long, device=DEVICE)
 print(
     textGenerator.decode(
-        m.generate(context, config=configurations, max_new_tokens=500)[0].tolist()
+        m.generate(context, config=configurations, max_new_tokens=1000)[0].tolist()
     )
 )
 
 
 model_path = "gpt/model.pt"
 torch.save(model.state_dict(), model_path)
-
