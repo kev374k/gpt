@@ -373,3 +373,8 @@ print(
         m.generate(context, config=configurations, max_new_tokens=500)[0].tolist()
     )
 )
+
+
+model_path = "gpt/model.pt"
+torch.save(model.state_dict(), model_path)
+
