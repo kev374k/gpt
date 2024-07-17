@@ -9,7 +9,7 @@ BLOCK_SIZE = 8  # 128
 MAX_ITERS = 5000
 EVAL_INTERVAL = 500
 LEARNING_RATE = 5e-4
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 EVAL_ITERS = 1
 N_EMBD = 32  # 128
 N_HEAD = 4  # 16
@@ -39,7 +39,7 @@ class GenerateText:
         self.idx_to_char = {i: ch for ch, i in self.char_to_idx.items()}
 
         # generating usable data
-        self.data = torch.tensor(self.encode(self.text), dtype=torch.long)
+        self.data = torch.tensor(self.encode(self.text), dtype=torch.int32)
         self.train_data, self.val_data = self._split_data(train_ratio=0.9)
 
     def _read_file(self):
@@ -103,7 +103,7 @@ class GenerateText:
 
 class LayerNorm(nn.Module):
     """
-    LayerNorm w/optional bias
+    LayerNorm w/optional bias bc PyTorch doesn't support when bias = None
     """
 
     def __init__(self, ndim, bias):
@@ -120,7 +120,7 @@ class LayerNorm(nn.Module):
 
 class SelfAttention(nn.Module):
     """
-    A single head of self-attention
+    Full Layers of Self Attention
     """
 
     def __init__(self, config):
@@ -193,8 +193,9 @@ class FeedForwardNetwork(nn.Module):
         n_embd = config.n_embd
         self.net = nn.Sequential(
             nn.Linear(n_embd, n_embd * 4),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(n_embd * 4, n_embd),
+            nn.Dropout(config.dropout)
         )
 
     def forward(self, x):
@@ -302,7 +303,7 @@ class GPT(nn.Module):
             if pn.endswith("c_proj.weight"):
                 nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer))
 
-        print("Number of Parameters Used: %.2fM" % (self.get_num_params() / 1e6))
+        print(f"Number of Parameters: {self.get_num_params() / 1e6:.2f}M")
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -322,6 +323,9 @@ class GPT(nn.Module):
         return int(n_params)
 
     def forward(self, idx, targets=None):
+        """
+        Forward Pass of the GPT
+        """
         B, T = idx.shape
 
         # idx and targets are both (B,T) tensor of integers
@@ -363,41 +367,62 @@ class GPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)  # (B, T+1)
         return idx
 
-    def save_model(self, model, model_path):
+class ModelHandler:
+    def __init__(self, model, model_path):
+        self.model = model
+        self.model_path = model_path
+
+    def save_model(self):
         """
         Used to save the model when it is done training
         """
-        torch.save(model.state_dict(), model_path)
+        torch.save(self.model.state_dict(), self.model_path)
+
+    def load_model(self):
+        """
+        Loading a pre-saved model
+        """
+        self.model.load_state_dict(torch.load(self.model_path))
+        self.model.eval()
+        return model
+
 
 
 FILE_PATH = "gpt/data/little_shakespeare.txt"
+MODEL_PATH = "gpt/models/model.pt"
 configurations = GPTConfig(FILE_PATH)
 textGenerator = GenerateText(FILE_PATH)
 model = GPT(configurations)
-m = model.to(DEVICE)
+modelHandler = ModelHandler(model, MODEL_PATH)
+loaded_model = modelHandler.load_model()
+m = loaded_model.to(DEVICE)
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+# context = torch.zeros((1, 1), dtype=torch.long, device=DEVICE)
+# print(
+#     textGenerator.decode(
+#         m.generate(context, config=configurations, max_new_tokens=1000)[0].tolist()
+#     )
+# )
 
-for iteration in range(MAX_ITERS):
-    if iteration % EVAL_INTERVAL == 0 or iteration == MAX_ITERS - 1:
-        losses = textGenerator.get_loss(model=model)
-        print(
-            f"Step {iteration}: Train Loss {losses['train']:.4f}, Val Loss {losses['val']:.4f}"
-        )
-    xb, yb = textGenerator.get_batch("train")
+# optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
-    cur_logits, cur_loss = model(xb, yb)
+# for iteration in range(MAX_ITERS):
+#     if iteration % EVAL_INTERVAL == 0 or iteration == MAX_ITERS - 1:
+#         losses = textGenerator.get_loss(model=model)
+#         print(
+#             f"Step {iteration}: Train Loss {losses['train']:.4f}, Val Loss {losses['val']:.4f}"
+#         )
+#     xb, yb = textGenerator.get_batch("train")
 
-    optimizer.zero_grad(set_to_none=True)
-    cur_loss.backward()
-    optimizer.step()
-context = torch.zeros((1, 1), dtype=torch.long, device=DEVICE)
-print(
-    textGenerator.decode(
-        m.generate(context, config=configurations, max_new_tokens=1000)[0].tolist()
-    )
-)
+#     cur_logits, cur_loss = model(xb, yb)
 
+#     optimizer.zero_grad(set_to_none=True)
+#     cur_loss.backward()
+#     optimizer.step()
+# context = torch.zeros((1, 1), dtype=torch.int32, device=DEVICE)
+# print(
+#     textGenerator.decode(
+#         m.generate(context, config=configurations, max_new_tokens=1000)[0].tolist()
+#     )
+# )
 
-model_path = "gpt/model.pt"
-torch.save(model.state_dict(), model_path)
