@@ -1,0 +1,40 @@
+Notes:
+Model 1 is trained on these values:
+BATCH_SIZE = 24
+BLOCK_SIZE = 128
+MAX_ITERS = 5000
+EVAL_INTERVAL = 500
+LEARNING_RATE = 5e-4
+DEVICE = (
+    "cuda"
+    if torch.cuda.is_available()
+    else "mps"
+    if torch.backends.mps.is_available()
+    else "cpu"
+)
+EVAL_ITERS = 1
+N_EMBD = 128
+N_HEAD = 16
+N_LAYER = 16
+DROPOUT = 0.2
+MAX_LENGTH = 2000
+
+Model 2 is trained on these values:
+BATCH_SIZE = 32
+BLOCK_SIZE = 256
+MAX_ITERS = 5000
+EVAL_INTERVAL = 500
+LEARNING_RATE = 5e-4
+DEVICE = (
+    "cuda"
+    if torch.cuda.is_available()
+    else "mps"
+    if torch.backends.mps.is_available()
+    else "cpu"
+)
+EVAL_ITERS = 10
+N_EMBD = 128
+N_HEAD = 16
+N_LAYER = 16
+DROPOUT = 0.2
+MAX_LENGTH = 5000

@@ -4,8 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-BATCH_SIZE = 24
-BLOCK_SIZE = 128
+BATCH_SIZE = 32
+BLOCK_SIZE = 256
 MAX_ITERS = 5000
 EVAL_INTERVAL = 500
 LEARNING_RATE = 5e-4
@@ -429,12 +429,12 @@ class ModelHandler:
 
 
 FILE_PATH = "gpt/data/little_shakespeare.txt"
-MODEL_PATH = "gpt/models/model1.pt"
+MODEL_PATH = "gpt/models/model2.pt"
 configurations = GPTConfig(FILE_PATH)
 textGenerator = GenerateText(FILE_PATH)
 model = GPT(configurations)
 modelHandler = ModelHandler(model, configurations)
-modelHandler.train_model(max_iters=2000)
+modelHandler.train_model()
 modelHandler.generate_tokens(textGenerator)
 modelHandler.save_model(MODEL_PATH)
 
