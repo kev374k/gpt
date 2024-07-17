@@ -4,16 +4,22 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-BATCH_SIZE = 8  # 24
-BLOCK_SIZE = 8  # 128
+BATCH_SIZE = 24
+BLOCK_SIZE = 128
 MAX_ITERS = 5000
 EVAL_INTERVAL = 500
 LEARNING_RATE = 5e-4
-DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-EVAL_ITERS = 1
-N_EMBD = 32  # 128
-N_HEAD = 4  # 16
-N_LAYER = 4  # 16
+DEVICE = (
+    "cuda"
+    if torch.cuda.is_available()
+    else "mps"
+    if torch.backends.mps.is_available()
+    else "cpu"
+)
+EVAL_ITERS = 10
+N_EMBD = 128
+N_HEAD = 16
+N_LAYER = 16
 DROPOUT = 0.2
 MAX_LENGTH = 5000
 
@@ -195,7 +201,7 @@ class FeedForwardNetwork(nn.Module):
             nn.Linear(n_embd, n_embd * 4),
             nn.GELU(),
             nn.Linear(n_embd * 4, n_embd),
-            nn.Dropout(config.dropout)
+            nn.Dropout(config.dropout),
         )
 
     def forward(self, x):
@@ -367,35 +373,71 @@ class GPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)  # (B, T+1)
         return idx
 
-class ModelHandler:
-    def __init__(self, model, model_path):
-        self.model = model
-        self.model_path = model_path
 
-    def save_model(self):
+class ModelHandler:
+    def __init__(self, model, config):
+        self.model = model
+        self.config = config
+
+    def save_model(self, model_save_path):
         """
         Used to save the model when it is done training
         """
-        torch.save(self.model.state_dict(), self.model_path)
+        torch.save(self.model.state_dict(), model_save_path)
 
-    def load_model(self):
+    def load_model(self, model_save_path):
         """
         Loading a pre-saved model
         """
-        self.model.load_state_dict(torch.load(self.model_path))
+        self.model.load_state_dict(torch.load(model_save_path, weights_only=True))
         self.model.eval()
-        return model
+        return self.model
 
+    def train_model(
+        self, eval_interval=EVAL_INTERVAL, lr=LEARNING_RATE, max_iters=MAX_ITERS
+    ):
+        """
+        Method to train model
+        """
+        self.model.to(self.config.device)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr)
+
+        for iteration in range(max_iters):
+            if iteration % eval_interval == 0 or iteration == max_iters - 1:
+                losses = textGenerator.get_loss(model=model)
+                print(
+                    f"Step {iteration}: Train Loss {losses['train']:.4f}, Val Loss {losses['val']:.4f}"
+                )
+            xb, yb = textGenerator.get_batch("train")
+
+            cur_logits, cur_loss = model(xb, yb)
+
+            optimizer.zero_grad(set_to_none=True)
+            cur_loss.backward()
+            optimizer.step()
+
+    def generate_tokens(self, text_generator, max_token_length=1000):
+        """
+        Method used to generate new tokens
+        """
+        context = torch.zeros((1, 1), dtype=torch.int32, device=self.config.device)
+        print(
+            text_generator.decode(
+                self.model.generate(context, self.config, max_token_length)[0].tolist()
+            )
+        )
 
 
 FILE_PATH = "gpt/data/little_shakespeare.txt"
-MODEL_PATH = "gpt/models/model.pt"
+MODEL_PATH = "gpt/models/model1.pt"
 configurations = GPTConfig(FILE_PATH)
 textGenerator = GenerateText(FILE_PATH)
 model = GPT(configurations)
-modelHandler = ModelHandler(model, MODEL_PATH)
-loaded_model = modelHandler.load_model()
-m = loaded_model.to(DEVICE)
+modelHandler = ModelHandler(model, configurations)
+modelHandler.train_model(max_iters=2000)
+modelHandler.generate_tokens(textGenerator)
+modelHandler.save_model(MODEL_PATH)
+
 
 # context = torch.zeros((1, 1), dtype=torch.long, device=DEVICE)
 # print(
@@ -425,4 +467,3 @@ m = loaded_model.to(DEVICE)
 #         m.generate(context, config=configurations, max_new_tokens=1000)[0].tolist()
 #     )
 # )
-
