@@ -391,7 +391,7 @@ class ModelHandler:
         """
         self.model.load_state_dict(torch.load(model_save_path, weights_only=True))
         self.model.eval()
-        return self.model
+        self.model.to(self.config.device)
 
     def train_model(
         self, eval_interval=EVAL_INTERVAL, lr=LEARNING_RATE, max_iters=MAX_ITERS
@@ -434,36 +434,8 @@ configurations = GPTConfig(FILE_PATH)
 textGenerator = GenerateText(FILE_PATH)
 model = GPT(configurations)
 modelHandler = ModelHandler(model, configurations)
-modelHandler.train_model()
-modelHandler.generate_tokens(textGenerator)
+modelHandler.load_model(MODEL_PATH)
+# modelHandler.train_model()
+modelHandler.generate_tokens(textGenerator, max_token_length = 1000)
 modelHandler.save_model(MODEL_PATH)
 
-
-# context = torch.zeros((1, 1), dtype=torch.long, device=DEVICE)
-# print(
-#     textGenerator.decode(
-#         m.generate(context, config=configurations, max_new_tokens=1000)[0].tolist()
-#     )
-# )
-
-# optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
-
-# for iteration in range(MAX_ITERS):
-#     if iteration % EVAL_INTERVAL == 0 or iteration == MAX_ITERS - 1:
-#         losses = textGenerator.get_loss(model=model)
-#         print(
-#             f"Step {iteration}: Train Loss {losses['train']:.4f}, Val Loss {losses['val']:.4f}"
-#         )
-#     xb, yb = textGenerator.get_batch("train")
-
-#     cur_logits, cur_loss = model(xb, yb)
-
-#     optimizer.zero_grad(set_to_none=True)
-#     cur_loss.backward()
-#     optimizer.step()
-# context = torch.zeros((1, 1), dtype=torch.int32, device=DEVICE)
-# print(
-#     textGenerator.decode(
-#         m.generate(context, config=configurations, max_new_tokens=1000)[0].tolist()
-#     )
-# )
