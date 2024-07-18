@@ -100,7 +100,6 @@ class GenerateText:
             for k in range(eval_iterations):
                 x, y = self.get_batch(split)
                 logits, loss = model(x, y)
-                print(loss)
                 losses[k] = loss.item()
             out[split] = losses.mean()
         model.train()
