@@ -405,7 +405,8 @@ class ModelHandler:
             if iteration % eval_interval == 0 or iteration == max_iters - 1:
                 losses = textGenerator.get_loss(model=model)
                 print(
-                    f"Step {iteration}: Train Loss {losses['train']:.4f}, Val Loss {losses['val']:.4f}"
+                    f"Step {iteration}: Train Loss {losses['train']:.4f}, \
+                        Val Loss {losses['val']:.4f}"
                 )
             xb, yb = textGenerator.get_batch("train")
 
