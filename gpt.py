@@ -421,11 +421,21 @@ class ModelHandler:
         Method used to generate new tokens
         """
         context = torch.zeros((1, 1), dtype=torch.int32, device=self.config.device)
-        print(
-            text_generator.decode(
+        tokens = text_generator.decode(
                 self.model.generate(context, self.config, max_token_length)[0].tolist()
             )
+        print(tokens)
+
+    def write_to_file(self, text_generator, file_save_path, max_token_length = 1000):
+        """
+        Method used to save tokens to a file for sample outputs
+        """
+        context = torch.zeros((1, 1), dtype=torch.int32, device=self.config.device)
+        tokens = text_generator.decode(
+            self.model.generate(context, self.config, max_token_length)[0].tolist()
         )
+        with open(file_save_path, 'w', encoding = "utf-8") as f:
+            print(tokens, file = f)
 
 
 FILE_PATH = "gpt/data/little_shakespeare.txt"
@@ -436,6 +446,6 @@ model = GPT(configurations)
 modelHandler = ModelHandler(model, configurations)
 modelHandler.load_model(MODEL_PATH)
 # modelHandler.train_model()
-modelHandler.generate_tokens(textGenerator, max_token_length = 1000)
-modelHandler.save_model(MODEL_PATH)
+modelHandler.write_to_file(textGenerator, "gpt/outputs/sample.txt", max_token_length = 10000)
+# modelHandler.save_model(MODEL_PATH)
 
